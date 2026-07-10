@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recursive Find</title>
+    <style>
+      :root { --bg:#1e1e2e; --panel:#27293d; --text:#e4e4f0; --muted:#9a9ab5; --accent:#7c6cff; --border:#3a3d55; }
+      * { box-sizing: border-box; }
+      body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; line-height:1.6; }
+      .wrap { max-width:720px; margin:0 auto; padding:64px 24px; }
+      h1 { font-size:30px; margin:0 0 6px; }
+      h1 span { color:var(--accent); }
+      .sub { color:var(--muted); margin-bottom:28px; }
+      a { color:var(--accent); }
+      ul { padding-left:20px; }
+      li { margin:6px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Recursive <span>Find</span></h1>
+      <div class="sub">Ctrl+F, but recursive — search the current page and every page it links to.</div>
+      <ul>
+        <li>Search the current page plus its links, to a depth you choose.</li>
+        <li>Text, whole-word, and regex matching (KMP), run in parallel across worker threads.</li>
+        <li>Lives in the Chrome side panel; click a result to open it with the match highlighted.</li>
+      </ul>
+      <p><a href="privacy.html">Privacy Policy</a></p>
+    </div>
+  </body>
+</html>

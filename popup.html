@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recursive Find</title>
+    <style>
+      :root {
+        --bg: #1e1e2e;
+        --panel: #27293d;
+        --border: #3a3d55;
+        --text: #e4e4f0;
+        --muted: #9a9ab5;
+        --accent: #7c6cff;
+        --match: #ffd166;
+        --hit: #3ddc97;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        width: 100%;
+        min-width: 300px;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 13px;
+        background: var(--bg);
+        color: var(--text);
+      }
+      header {
+        padding: 12px 14px 8px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+      }
+      h1 span { color: var(--accent); }
+      .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+      .controls { padding: 0 14px 10px; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+      input[type="text"] {
+        flex: 1;
+        min-width: 0; /* allow the field to shrink so buttons stay in view */
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        font-size: 13px;
+      }
+      .row > button { flex: 0 0 auto; }
+      input[type="text"]:focus { outline: none; border-color: var(--accent); }
+      .depth-wrap { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+      input[type="number"] {
+        width: 52px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        font-size: 13px;
+      }
+      select {
+        flex: 1;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      select:focus { outline: none; border-color: var(--accent); }
+      label.check { display: flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; }
+      button {
+        padding: 8px 14px;
+        border-radius: 8px;
+        border: none;
+        background: var(--accent);
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      button.stop { background: #e05a6b; }
+      button.stop:hover { background: #d3485a; }
+      .status {
+        padding: 6px 14px;
+        color: var(--muted);
+        font-size: 11px;
+        min-height: 16px;
+        border-top: 1px solid var(--border);
+      }
+      .bar { height: 3px; background: var(--panel); overflow: hidden; }
+      .bar > div { height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+      #results { flex: 1; min-height: 120px; overflow-y: auto; padding: 0 8px 10px; }
+      .result {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        margin: 6px 0;
+        background: var(--panel);
+        cursor: pointer;
+      }
+      .result:hover { border-color: var(--accent); }
+      .result.nohit { opacity: 0.6; }
+      .others {
+        margin: 10px 0 4px;
+        border-top: 1px solid var(--border);
+        padding-top: 6px;
+      }
+      .others-sum {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 12px;
+        padding: 4px 2px;
+        list-style: none;
+        user-select: none;
+      }
+      .others-sum::-webkit-details-marker { display: none; }
+      .others-sum::before {
+        content: "▸";
+        display: inline-block;
+        margin-right: 6px;
+        transition: transform 0.15s;
+      }
+      .others[open] .others-sum::before { transform: rotate(90deg); }
+      .others[open] .others-sum { color: var(--text); }
+      .others-sum:hover { color: var(--text); }
+      .result.err { border-color: #6b3a3a; }
+      .r-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+      .r-title {
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+      }
+      .r-title a { color: var(--text); text-decoration: none; }
+      .r-title a:hover { text-decoration: underline; }
+      .r-count {
+        color: var(--hit);
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .r-count.zero { color: var(--muted); }
+      .r-meta { color: var(--muted); font-size: 10px; margin-top: 2px; }
+      .r-err { color: #e88; font-size: 11px; margin-top: 4px; }
+      .preview {
+        margin-top: 5px;
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.45;
+        font-style: italic;
+        word-break: break-word;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .snip {
+        margin-top: 5px;
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.5;
+        word-break: break-word;
+      }
+      .snip mark { background: var(--match); color: #241; border-radius: 2px; padding: 0 1px; }
+      .empty { color: var(--muted); text-align: center; padding: 20px; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Recursive <span>Find</span></h1>
+      <div class="sub">Ctrl+F across every linked page</div>
+    </header>
+
+    <div class="controls">
+      <div class="row">
+        <input type="text" id="query" placeholder="Search text…" autofocus />
+        <button id="go">Find</button>
+        <button id="stop" class="stop" hidden>Stop</button>
+      </div>
+      <div class="row">
+        <div class="depth-wrap">
+          <span>Depth</span>
+          <input type="number" id="depth" min="0" max="5" value="1" />
+        </div>
+        <div class="depth-wrap">
+          <span>Max pages</span>
+          <input type="number" id="maxPages" min="1" value="500" title="Cap on total pages fetched" />
+        </div>
+        <select id="mode" title="Match mode">
+          <option value="text">Text</option>
+          <option value="word">Whole word</option>
+          <option value="regex">Regex</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="check">
+          <input type="checkbox" id="caseSensitive" />
+          Match case
+        </label>
+        <label class="check">
+          <input type="checkbox" id="sameOrigin" />
+          Same site only
+        </label>
+        <label class="check">
+          <input type="checkbox" id="stopFirst" />
+          Stop at first hit
+        </label>
+      </div>
+    </div>
+
+    <div class="bar"><div id="progress"></div></div>
+    <div class="status" id="status">Enter a term and hit Find.</div>
+    <div id="results"></div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

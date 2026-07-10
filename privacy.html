@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recursive Find — Privacy Policy</title>
+    <style>
+      :root {
+        --bg: #1e1e2e;
+        --panel: #27293d;
+        --text: #e4e4f0;
+        --muted: #9a9ab5;
+        --accent: #7c6cff;
+        --border: #3a3d55;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+      .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 80px; }
+      h1 { font-size: 26px; margin: 0 0 4px; }
+      h1 span { color: var(--accent); }
+      h2 { font-size: 18px; margin: 32px 0 8px; }
+      .updated { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+      p, li { color: var(--text); }
+      ul { padding-left: 20px; }
+      li { margin: 6px 0; }
+      code { background: var(--panel); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+      a { color: var(--accent); }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px 20px;
+        margin-top: 16px;
+      }
+      strong { color: #fff; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Recursive <span>Find</span> — Privacy Policy</h1>
+      <div class="updated">Last updated: July 9, 2026</div>
+
+      <p>
+        Recursive Find is a browser extension that searches for text on the page
+        you are viewing and, to a depth you choose, on the pages that page links
+        to. This policy explains what the extension accesses and what it does
+        (and does not) do with that information.
+      </p>
+
+      <div class="card">
+        <strong>The short version:</strong> Recursive Find does all of its work
+        locally in your browser. It does not collect, store off your device,
+        sell, or transmit any personal data. There are no analytics, no
+        tracking, and no external servers operated by us.
+      </div>
+
+      <h2>What the extension accesses</h2>
+      <ul>
+        <li>
+          <strong>The current page's text and links.</strong> When you start a
+          search, the extension reads the visible text and hyperlinks of the tab
+          you are viewing so it knows what to search and which links to follow.
+        </li>
+        <li>
+          <strong>The content of linked pages.</strong> To perform a recursive
+          search, the extension fetches the linked pages (which may be on any
+          website) and searches their text. This is the same kind of request
+          your browser makes when you click a link.
+        </li>
+        <li>
+          <strong>Your search settings.</strong> Your last-used query, depth,
+          page limit, match mode, and toggle options are saved on your device
+          (via <code>chrome.storage.local</code>) so they persist between
+          sessions.
+        </li>
+      </ul>
+
+      <h2>What we do with it</h2>
+      <p>
+        All page content is processed in memory in your browser purely to
+        produce and display search results, and is discarded when the search
+        ends. None of it is sent to us or to any third party. We do not build
+        profiles, run analytics, or log your activity.
+      </p>
+
+      <h2>Permissions</h2>
+      <ul>
+        <li><strong>activeTab / scripting</strong> — read the current page's text and links, and highlight a match in a result page you open.</li>
+        <li><strong>host access (all sites)</strong> — fetch the text of pages linked from your current page during a search you start. The set of sites isn't known in advance because it depends on the page you're viewing.</li>
+        <li><strong>storage</strong> — remember your search settings locally.</li>
+        <li><strong>sidePanel</strong> — display the extension's side-panel interface.</li>
+      </ul>
+
+      <h2>Data sharing</h2>
+      <p>
+        We do not sell or transfer your data to third parties. We do not use your
+        data for any purpose unrelated to the extension's single purpose, and we
+        do not use it to determine creditworthiness or for lending purposes.
+      </p>
+
+      <h2>Changes</h2>
+      <p>
+        If this policy changes, the updated version will be posted at this URL
+        with a new "last updated" date.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions about this policy? Email
+        <a href="mailto:grtwrn@gmail.com">grtwrn@gmail.com</a>.
+      </p>
+    </div>
+  </body>
+</html>
