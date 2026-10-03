@@ -68,3 +68,8 @@ Same site only by default, breadth-first, 4 parallel fetches, 10 s per page, a
 Server HTML only: no JavaScript rendering, no cookies or logins. Pages over
 32 MB are searched partially and flagged in the summary, as are crawls that
 hit `max_pages` or `max_seconds`.
+
+**Security note:** the tool fetches whatever URL it's given, including
+`localhost` and private network addresses, as the user running it. That's fine
+for a local server you run yourself. Don't expose it as a shared or hosted
+service without blocking private addresses first.
