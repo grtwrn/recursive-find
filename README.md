@@ -44,6 +44,31 @@ work (Chrome 114+).
 - `kmp.js` — O(n + m) exact substring search.
 - `background.js` — only configures the side panel to open on the toolbar click.
 
+## Command line + AI agent skill (`cli/`)
+
+The same crawler, headless, for scripts and AI agents. One call answers "which
+pages on this site mention X?" and returns only the matching pages with short
+snippets, so an agent doesn't have to fetch and read every page itself.
+
+```sh
+node cli/scripts/rfind.mjs https://docs.openclaw.ai/tools/skills "extraDirs" --within /tools/
+```
+
+```
+8 hits on 2 pages · 100 pages scanned, depth 1, 4.3s · hit --max-pages 100, results may be incomplete
+
+4× https://docs.openclaw.ai/tools/skills  — Skills - OpenClaw
+   …7 — lowest Extra directories skills.load.[[extraDirs]] + plugin skills…
+```
+
+- Node 18+, no dependencies. `--help` lists the flags: `--depth`, `--within`,
+  `--max-pages`, `--mode text|word|regex`, `--case`, `--first`, `--json`, etc.
+- Agent-safe defaults: same site only, depth 1, 100-page cap, 4 parallel
+  fetches, honors `robots.txt`, skips non-HTML links, caps each page at 3 MB.
+- `cli/` is also an [Agent Skill](https://agentskills.io) (`cli/SKILL.md`):
+  copy it into your agent's skills folder as `recursive-find/` and symlink
+  `scripts/rfind.mjs` onto your PATH as `rfind`.
+
 ## Regenerating icons
 
 Icons are generated procedurally — `node gen_icons.js` rewrites `icons/*.png`.
