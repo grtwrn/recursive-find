@@ -42,7 +42,8 @@ rfind <url> "<query>" [--depth 1] [--within /docs/] [--max-pages 100] [--mode te
 ## Behavior
 
 - Same site only by default (`--any-site` to leave it); honors robots.txt
-  (`--ignore-robots` only when the user asks); 4 parallel fetches; 10 s per page.
+  (`--ignore-robots` only when the user asks); 4 parallel fetches; 10 s per page;
+  the whole crawl stops after 120 s (`--max-seconds`), flagged in the summary.
 - Text comes from server HTML only (no JS), no cookies/login. Skips PDFs,
   images and other non-HTML links.
 - Exit 0 = crawl ran (even with 0 hits); 1 = start page failed; 2 = bad arguments.

@@ -62,14 +62,19 @@ node cli/scripts/rfind.mjs https://docs.openclaw.ai/tools/skills "extraDirs" --w
 ```
 
 - Node 18+, no dependencies. `--help` lists the flags: `--depth`, `--within`,
-  `--max-pages`, `--mode text|word|regex`, `--case`, `--main` (main content
-  only, ignoring nav and sidebars), `--first`, `--json`, etc.
-- Agent-safe defaults: same site only, depth 1, 100-page cap, 4 parallel
-  fetches, honors `robots.txt`, skips non-HTML links. Pages over 32 MB are
-  searched partially and flagged in the summary.
+  `--max-pages`, `--max-seconds`, `--mode text|word|regex`, `--case`, `--main`
+  (main content only, ignoring nav and sidebars), `--first`, `--json`, etc.
+- Agent-safe defaults: same site only, depth 1, 100-page cap, 120 s crawl
+  limit, 4 parallel fetches, honors `robots.txt`, skips non-HTML links. Pages
+  over 32 MB are searched partially and flagged in the summary.
+- **MCP server:** `cli/` is also the npm package `recursive-find-mcp`, a stdio
+  MCP server with one tool, `recursive_find`
+  (`claude mcp add recursive-find -- npx -y recursive-find-mcp`). Setup for
+  Claude Desktop, Claude Code and Cursor: [cli/README.md](cli/README.md).
 - `cli/` is also an [Agent Skill](https://agentskills.io) (`cli/SKILL.md`):
   copy it into your agent's skills folder as `recursive-find/` and symlink
   `scripts/rfind.mjs` onto your PATH as `rfind`.
+- Tests: `cd cli && npm install && npm test` (offline, local fixture site).
 
 ### Benchmark: agents with and without `rfind`
 

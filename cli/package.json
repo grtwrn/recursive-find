@@ -1,0 +1,45 @@
+{
+  "name": "recursive-find-mcp",
+  "version": "1.0.0",
+  "description": "Ctrl+F for whole websites, for agents: search a page and every page it links to, get back only the matching pages with snippets. MCP server, CLI (rfind) and agent skill.",
+  "type": "module",
+  "bin": {
+    "rfind": "scripts/rfind.mjs",
+    "recursive-find-mcp": "scripts/mcp.mjs"
+  },
+  "files": [
+    "scripts/",
+    "SKILL.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "zod": "^4.6.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/grtwrn/recursive-find.git",
+    "directory": "cli"
+  },
+  "homepage": "https://github.com/grtwrn/recursive-find/tree/master/cli#readme",
+  "bugs": {
+    "url": "https://github.com/grtwrn/recursive-find/issues"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "agent",
+    "skill",
+    "crawler",
+    "search",
+    "find",
+    "website-search",
+    "cli"
+  ]
+}
