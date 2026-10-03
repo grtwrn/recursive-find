@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { computeLPS, kmpSearch } from "../scripts/kmp.mjs";
 import {
-  decodeEntities, extractLinks, findMatches, htmlToText, mainContent, normalizeUrl, pageTitle,
+  decodeEntities, extractLinks, findMatches, foldCase, htmlToText, mainContent, normalizeUrl, pageTitle,
   parseRobots, resolveOptions, robotsAllows, searchText,
 } from "../scripts/crawl.mjs";
 
@@ -154,4 +154,50 @@ test("resolveOptions: defaults, caps and validation", () => {
   assert.throws(() => resolveOptions({ url: "http://a.test", query: "x", mode: "fuzzy" }), /mode must be/);
   assert.throws(() => resolveOptions({ url: "http://exa mple.com", query: "x" }), /bad url/);
   assert.throws(() => resolveOptions({ url: "http://a.test", query: "x", depth: -1 }), /bad value for depth/);
+});
+
+// The original htmlToText: a chain of full-string replaces. The single-scan
+// version must give the same text (except that entities are decoded once).
+function htmlToTextReference(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;|&#39;|&apos;/g, (m) => ({ "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&apos;": "'" })[m])
+    .replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(Number(n)); } catch { return " "; } })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => { try { return String.fromCodePoint(parseInt(n, 16)); } catch { return " "; } })
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+test("htmlToText: same text as the replace chain on random tag soup", () => {
+  const tokens = ["<script>", "</script>", "<SCRIPT a=1>", "</style>", "<style>", "<noscript>", "</noscript>",
+    "<!--", "-->", ">", "<", "<>", "<p>", "</p", "<scripts>", "<!-->", "a", "é", " ", "\n", " ",
+    "&amp;", "&#65;", "&#x42;", "&nbsp;", "&lt;", "<a href='x'>", "'", '"'];
+  let seed = 42;
+  const rnd = (n) => (seed = (seed * 1103515245 + 12345) % 2147483648) % n;
+  for (let k = 0; k < 20000; k++) {
+    let s = "";
+    for (let j = rnd(30); j > 0; j--) s += tokens[rnd(tokens.length)];
+    assert.equal(htmlToText(s), htmlToTextReference(s), JSON.stringify(s));
+  }
+  // Long runs are processed in chunks; whitespace and entities at chunk edges.
+  const long = "<p>" + "word &amp; ".repeat(60000) + "x".repeat(300000) + " tail</p>" + "y \n ".repeat(100000);
+  assert.equal(htmlToText(long), htmlToTextReference(long));
+});
+
+test("htmlToText: linear on pages full of unclosed '<' and comments", () => {
+  const t0 = Date.now();
+  htmlToText("<a ".repeat(200000) + "<!-- ".repeat(200000) + "<script ".repeat(200000));
+  assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
+});
+
+test("case-insensitive matches stay aligned after characters whose lowercase is longer (İ)", () => {
+  const text = "İstanbul Boğazı, İstanbul Boğazı";
+  const r = searchText(text, { query: "boğaz", mode: "text", caseSensitive: false }, 2);
+  assert.equal(r.matchCount, 2);
+  assert.match(r.snippets[0], /\[\[Boğaz\]\]ı/);
+  assert.equal(foldCase("İa").length, 2);
 });

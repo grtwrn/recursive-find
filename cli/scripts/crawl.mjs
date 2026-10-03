@@ -3,7 +3,13 @@
 // fetch a page, strip it to text, search it, follow its links breadth-first
 // to `depth`, and return only the pages that match. Never writes to stdout.
 
-import { kmpSearch } from "./kmp.mjs";
+import { Worker } from "node:worker_threads";
+import { decodeBody, normalizeUrl } from "./page.mjs";
+
+export {
+  decodeBody, decodeEntities, extractLinks, findMatches, foldCase, htmlToText, mainContent,
+  normalizeUrl, pageTitle, processPage, searchText, sniffEncoding,
+} from "./page.mjs";
 
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
 export const DEFAULTS = {
@@ -12,11 +18,11 @@ export const DEFAULTS = {
   timeout: 10, maxSeconds: 120, robots: true, maxBodyBytes: MAX_BODY_BYTES,
 };
 
-const SNIPPET_RADIUS = 60;
 const MAX_ERRORS_SHOWN = 20;
+const MAX_RETRY_AFTER_MS = 10_000;
+const DEFAULT_RETRY_MS = 1000;
+const ROBOTS_MAX_BYTES = 512 * 1024;
 const UA = "rfind/1.0 (+https://github.com/grtwrn/recursive-find)";
-const SKIP_EXT =
-  /\.(pdf|jpe?g|png|gif|webp|svg|ico|bmp|tiff?|mp[34]|m4a|wav|ogg|webm|mov|avi|zip|gz|tgz|bz2|7z|rar|dmg|exe|pkg|deb|rpm|iso|woff2?|ttf|otf|eot|css|js|mjs|json|xml|rss|atom|csv|md|markdown|xlsx?|docx?|pptx?)$/i;
 
 // --- options ---
 
@@ -39,11 +45,16 @@ export function resolveOptions(input) {
   opts.timeout = clamp("timeout", 1, Infinity);
   opts.maxSeconds = clamp("maxSeconds", 1, Infinity);
   opts.maxBodyBytes = clamp("maxBodyBytes", 1, Infinity);
-  opts.within = opts.within || null;
+  // A path prefix as URL.pathname spells it: leading "/", non-ASCII
+  // percent-encoded (so "/café/" matches); a full URL means its path.
+  opts.within = opts.within ? new URL(String(opts.within), "http://x/").pathname : null;
 
   let url = String(opts.url ?? "").trim();
   if (!/^https?:\/\//i.test(url)) url = "https://" + url;
-  try { opts.url = new URL(url).href; } catch { throw new Error(`bad url: ${url}`); }
+  let parsed;
+  try { parsed = new URL(url); } catch { throw new Error(`bad url: ${url}`); }
+  if (parsed.username || parsed.password) throw new Error("URLs with a username or password aren't supported");
+  opts.url = parsed.href;
   if (!["text", "word", "regex"].includes(opts.mode)) throw new Error("mode must be text, word or regex");
   if (!opts.query) throw new Error("empty query");
   opts.query = String(opts.query);
@@ -53,191 +64,128 @@ export function resolveOptions(input) {
   return opts;
 }
 
-// --- text utilities (from worker.js) ---
-
-const NAMED_ENTITIES = {
-  "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">",
-  "&quot;": '"', "&#39;": "'", "&apos;": "'",
-};
-
-export function decodeEntities(text) {
-  return text
-    .replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;|&#39;|&apos;/g, (m) => NAMED_ENTITIES[m])
-    .replace(/&#(\d+);/g, (_, n) => safeCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => safeCodePoint(parseInt(n, 16)));
-}
-
-function safeCodePoint(n) {
-  try { return String.fromCodePoint(n); } catch { return " "; }
-}
-
-export function htmlToText(html) {
-  return decodeEntities(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-      .replace(/<!--[\s\S]*?-->/g, " ")
-      .replace(/<[^>]+>/g, " ")
-  )
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export function pageTitle(html) {
-  const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  return m ? decodeEntities(m[1]).replace(/\s+/g, " ").trim() : "";
-}
-
-export function extractLinks(html, baseUrl) {
-  const base = /<base\b[^>]*?\bhref\s*=\s*["']?([^"'\s>]+)/i.exec(html);
-  if (base) {
-    try { baseUrl = new URL(base[1], baseUrl).href; } catch { /* keep page url */ }
-  }
-  const links = new Set();
-  const re = /<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/gi;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    const raw = decodeEntities((m[1] ?? m[2] ?? m[3] ?? "").trim());
-    if (!raw || raw.startsWith("#") || /^(javascript|mailto|tel|data):/i.test(raw)) continue;
-    try {
-      const url = new URL(raw, baseUrl);
-      if ((url.protocol === "http:" || url.protocol === "https:") && !SKIP_EXT.test(url.pathname)) {
-        url.hash = "";
-        links.add(url.href);
-      }
-    } catch { /* skip malformed URLs */ }
-  }
-  return [...links];
-}
-
-export function normalizeUrl(href) {
-  try {
-    const u = new URL(href);
-    u.hash = "";
-    let s = u.href;
-    if (s.endsWith("/") && u.pathname !== "/") s = s.slice(0, -1);
-    return s;
-  } catch {
-    return href;
-  }
-}
-
-// The page's main content: the first <main>, role="main" element or <article>,
-// found by counting nested tags of the same name. Falls back to the whole page.
-export function mainContent(html) {
-  const open =
-    /<main\b[^>]*>/i.exec(html) ||
-    /<([a-z][a-z0-9]*)\b[^>]*\brole\s*=\s*["']?main\b[^>]*>/i.exec(html) ||
-    /<article\b[^>]*>/i.exec(html);
-  if (!open) return html;
-  const tag = (open[1] || /^<([a-z0-9]+)/i.exec(open[0])[1]).toLowerCase();
-  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, "gi");
-  re.lastIndex = open.index + open[0].length;
-  let depth = 1;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    depth += m[1] ? -1 : 1;
-    if (depth === 0) return html.slice(open.index, m.index);
-  }
-  return html.slice(open.index);
-}
-
-// --- matching (from worker.js) ---
-
-const WORD_RE = /\w/;
-const isWordChar = (c) => c !== undefined && WORD_RE.test(c);
-
-export function findMatches(text, { query, mode, caseSensitive }) {
-  if (mode === "regex") {
-    const re = new RegExp(query, caseSensitive ? "g" : "gi");
-    const out = [];
-    let m;
-    let guard = 0;
-    while ((m = re.exec(text)) !== null) {
-      out.push({ index: m.index, length: m[0].length || 1 });
-      if (m.index === re.lastIndex) re.lastIndex++;
-      if (++guard > 100000) break;
-    }
-    return out;
-  }
-  const haystack = caseSensitive ? text : text.toLowerCase();
-  const needle = caseSensitive ? query : query.toLowerCase();
-  let indices = kmpSearch(haystack, needle);
-  if (mode === "word") {
-    indices = indices.filter((i) => !isWordChar(text[i - 1]) && !isWordChar(text[i + query.length]));
-  }
-  return indices.map((i) => ({ index: i, length: query.length }));
-}
-
-export function searchText(text, cfg, maxSnippets) {
-  const matches = findMatches(text, cfg);
-  const snippets = [];
-  let lastEnd = -1;
-  for (const { index, length } of matches) {
-    if (snippets.length >= maxSnippets) break;
-    if (index < lastEnd) continue; // skip matches inside the previous snippet
-    const start = Math.max(0, index - SNIPPET_RADIUS);
-    const end = Math.min(text.length, index + length + SNIPPET_RADIUS);
-    snippets.push(
-      (start > 0 ? "…" : "") + text.slice(start, index) + "[[" + text.slice(index, index + length) +
-        "]]" + text.slice(index + length, end) + (end < text.length ? "…" : "")
-    );
-    lastEnd = end;
-  }
-  return { matchCount: matches.length, snippets };
-}
-
 // --- fetching ---
 
-// `signal` aborts the fetch from outside (the crawl deadline); the error message
-// is then "deadline" instead of "timeout".
-export async function fetchHtml(url, timeoutMs, { signal, maxBodyBytes = MAX_BODY_BYTES } = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const onAbort = () => controller.abort();
-  if (signal?.aborted) controller.abort();
-  else signal?.addEventListener("abort", onAbort, { once: true });
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml,text/plain;q=0.9" },
-    });
-    if (!res.ok) {
-      res.body?.cancel().catch(() => {});
-      throw new Error(`HTTP ${res.status}`);
-    }
-    const type = res.headers.get("content-type") || "";
-    if (type && !/text\/html|text\/plain|application\/xhtml/i.test(type)) {
-      res.body?.cancel().catch(() => {});
-      throw Object.assign(new Error(`skipped ${type.split(";")[0]}`), { skipped: true });
-    }
-    const reader = res.body.getReader();
-    const chunks = [];
-    let size = 0;
-    let truncated = false;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.length;
-      chunks.push(value);
-      if (size > maxBodyBytes) {
-        truncated = true;
-        reader.cancel().catch(() => {});
-        break;
-      }
-    }
-    return { html: Buffer.concat(chunks).toString("utf8"), finalUrl: res.url || url, truncated };
-  } catch (e) {
-    if (e?.name === "AbortError" || controller.signal.aborted) {
-      throw new Error(signal?.aborted ? "deadline" : "timeout");
-    }
-    throw e;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
+// Resolves after `ms`, or rejects as soon as `signal` aborts.
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error("deadline"));
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("deadline"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+// Retry-After in ms (delay-seconds or an HTTP date), or null.
+export function retryAfterMs(value, now = Date.now()) {
+  if (!value) return null;
+  if (/^\s*\d+\s*$/.test(value)) return Number(value) * 1000;
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? null : Math.max(0, t - now);
+}
+
+// "fetch failed" says nothing; undici puts the reason (DNS, TLS, refused,
+// redirect loop…) in `cause`.
+function describeFetchError(e) {
+  const cause = e?.cause;
+  if (e?.message === "fetch failed" && cause) {
+    const why = cause.code && cause.code !== "UND_ERR" ? cause.code : cause.message;
+    return `fetch failed: ${why || "network error"}`;
   }
+  return (e?.message || String(e)).replace(/\/\/[^/@\s]*@/g, "//"); // never echo credentials
+}
+
+// Fetches a page's body as bytes (decoded later, by its declared charset).
+// `signal` aborts from outside (the crawl deadline); the error is then
+// "deadline" instead of "timeout". A 429 or 503 is retried once after its
+// Retry-After (at most 10 s; 1 s if absent); `pauses` (origin -> time) makes
+// the other fetches to that origin wait too. The timeout covers each attempt.
+export async function fetchPage(url, timeoutMs, { signal, maxBodyBytes = MAX_BODY_BYTES, pauses } = {}) {
+  const origin = new URL(url).origin;
+  for (let attempt = 0; ; attempt++) {
+    const wait = (pauses?.get(origin) ?? 0) - Date.now();
+    if (wait > 0) await sleep(wait, signal);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const onAbort = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        redirect: "follow",
+        headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml,text/plain;q=0.9" },
+      });
+      if (!res.ok) {
+        res.body?.cancel().catch(() => {});
+        let msg = `HTTP ${res.status}`;
+        if (res.status === 429 || res.status === 503) {
+          const after = retryAfterMs(res.headers.get("retry-after"));
+          if (attempt === 0 && (after === null || after <= MAX_RETRY_AFTER_MS)) {
+            const ms = after ?? DEFAULT_RETRY_MS;
+            pauses?.set(origin, Math.max(pauses.get(origin) ?? 0, Date.now() + ms));
+            clearTimeout(timer);
+            await sleep(ms, signal);
+            continue;
+          }
+          msg += attempt ? " (also after a retry)" : `, Retry-After ${Math.round(after / 1000)}s (not retried)`;
+        }
+        throw new Error(msg);
+      }
+      const type = res.headers.get("content-type") || "";
+      if (type && !/text\/html|text\/plain|application\/xhtml/i.test(type)) {
+        res.body?.cancel().catch(() => {});
+        throw Object.assign(new Error(`skipped ${type.split(";")[0]}`), { skipped: true });
+      }
+      const chunks = [];
+      let size = 0;
+      let truncated = false;
+      if (res.body) {
+        const reader = res.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.length;
+          chunks.push(value);
+          if (size > maxBodyBytes) {
+            truncated = true;
+            reader.cancel().catch(() => {});
+            break;
+          }
+        }
+      }
+      // One exact-size buffer of our own, so it can be transferred to a worker.
+      const bytes = new Uint8Array(size);
+      let at = 0;
+      for (const c of chunks) {
+        bytes.set(c, at);
+        at += c.length;
+      }
+      return { bytes, contentType: type, finalUrl: res.url || url, truncated };
+    } catch (e) {
+      if (e?.name === "AbortError" || controller.signal.aborted) {
+        throw new Error(signal?.aborted ? "deadline" : "timeout");
+      }
+      if (e?.skipped || /^HTTP /.test(e?.message)) throw e;
+      throw new Error(describeFetchError(e));
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+}
+
+// Fetches a page and decodes it as text (for robots.txt and callers that
+// want the old string API).
+export async function fetchHtml(url, timeoutMs, opts) {
+  const { bytes, contentType, finalUrl, truncated } = await fetchPage(url, timeoutMs, opts);
+  return { html: decodeBody(bytes, contentType), finalUrl, truncated };
 }
 
 // Minimal robots.txt: Disallow/Allow rules in the "User-agent: *" (or rfind)
@@ -246,11 +194,14 @@ export function parseRobots(txt) {
   const rules = [];
   let agents = [];
   let inRules = false;
-  for (const line of txt.split(/\r?\n/)) {
-    const m = /^\s*([a-z-]+)\s*:\s*(.*?)\s*(#.*)?$/i.exec(line);
-    if (!m) continue;
-    const key = m[1].toLowerCase();
-    const val = m[2];
+  for (let line of txt.split(/\r\n?|\n/)) {
+    const hash = line.indexOf("#");
+    if (hash !== -1) line = line.slice(0, hash);
+    const colon = line.indexOf(":");
+    if (colon === -1) continue;
+    const key = line.slice(0, colon).trim().toLowerCase();
+    if (!/^[a-z-]+$/.test(key)) continue;
+    const val = line.slice(colon + 1).trim();
     if (key === "user-agent") {
       if (inRules) { agents = []; inRules = false; }
       agents.push(val.toLowerCase());
@@ -264,17 +215,79 @@ export function parseRobots(txt) {
   return rules;
 }
 
+// Does a robots.txt path pattern match? "*" is any run of characters and a
+// final "$" anchors the end. Matched piece by piece (no RegExp), so a
+// hostile pattern like "/*a*a*a*a*a*b" can't backtrack for minutes.
+function robotsMatch(pattern, path) {
+  const anchored = pattern.endsWith("$");
+  const pieces = (anchored ? pattern.slice(0, -1) : pattern).split("*");
+  if (!path.startsWith(pieces[0])) return false;
+  if (pieces.length === 1) return !anchored || path.length === pieces[0].length;
+  let at = pieces[0].length;
+  const last = pieces.length - 1;
+  for (let i = 1; i < last; i++) {
+    const found = path.indexOf(pieces[i], at);
+    if (found === -1) return false;
+    at = found + pieces[i].length;
+  }
+  if (!anchored) return path.indexOf(pieces[last], at) !== -1;
+  return path.length - pieces[last].length >= at && path.endsWith(pieces[last]);
+}
+
 export function robotsAllows(rules, url) {
   const u = new URL(url);
   const path = u.pathname + u.search;
   let best = null;
   for (const r of rules) {
-    const re = new RegExp(
-      "^" + r.path.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\\\$$/, "$")
-    );
-    if (re.test(path) && (!best || r.path.length > best.path.length)) best = r;
+    if (robotsMatch(r.path, path) && (!best || r.path.length > best.path.length)) best = r;
   }
   return !best || best.allow;
+}
+
+// --- page processing in worker threads ---
+
+const WORKER_URL = new URL("./page-worker.mjs", import.meta.url);
+// Caps a worker's heap so one page can't take the whole process down.
+const WORKER_LIMITS = { maxOldGenerationSizeMb: 1024 };
+
+// Runs processPage (page.mjs) in worker threads, at most one page per worker,
+// started as needed. A page that takes longer than `timeoutMs` has its worker
+// terminated, which stops even a regex stuck in catastrophic backtracking.
+class PagePool {
+  idle = [];
+  busy = new Set();
+  closed = false;
+
+  process(job, timeoutMs, timeoutMessage) {
+    if (this.closed) return Promise.reject(new Error("deadline"));
+    const worker = this.idle.pop() || new Worker(WORKER_URL, { resourceLimits: WORKER_LIMITS });
+    return new Promise((resolve, reject) => {
+      const entry = {};
+      const settle = (reuse, fn, value) => {
+        clearTimeout(timer);
+        worker.off("message", onMessage).off("error", onError).off("exit", onExit);
+        this.busy.delete(entry);
+        if (reuse && !this.closed) this.idle.push(worker);
+        else worker.terminate().catch(() => {});
+        fn(value);
+      };
+      const onMessage = (m) => (m.ok ? settle(true, resolve, m.result) : settle(true, reject, new Error(m.error)));
+      const onError = (e) =>
+        settle(false, reject, new Error(e?.code === "ERR_WORKER_OUT_OF_MEMORY" ? "page too large to search (out of memory)" : e?.message || String(e)));
+      const onExit = () => settle(false, reject, new Error("page worker exited"));
+      const timer = setTimeout(() => settle(false, reject, new Error(timeoutMessage)), timeoutMs);
+      entry.kill = () => settle(false, reject, new Error("deadline"));
+      this.busy.add(entry);
+      worker.on("message", onMessage).on("error", onError).on("exit", onExit);
+      worker.postMessage(job, [job.bytes.buffer]);
+    });
+  }
+
+  close() {
+    this.closed = true;
+    for (const entry of [...this.busy]) entry.kill();
+    for (const w of this.idle.splice(0)) w.terminate().catch(() => {});
+  }
 }
 
 // --- crawl ---
@@ -283,11 +296,16 @@ export function robotsAllows(rules, url) {
 // (use toJSON / formatText to apply `limit`). Throws only on bad options.
 export async function crawl(input) {
   const opts = resolveOptions(input);
-  const cfg = { query: opts.query, mode: opts.mode, caseSensitive: opts.caseSensitive };
   const timeoutMs = opts.timeout * 1000;
-  const startOrigin = new URL(opts.url).origin;
+  // Same site = the start URL's origin, plus the origin it redirects to
+  // (example.com -> www.example.com), whose links are all on the new origin.
+  const origins = new Set([new URL(opts.url).origin]);
   const deadline = new AbortController();
-  const fetchOpts = { signal: deadline.signal, maxBodyBytes: opts.maxBodyBytes };
+  const fetchOpts = { signal: deadline.signal, maxBodyBytes: opts.maxBodyBytes, pauses: new Map() };
+  const pool = new PagePool();
+  const searchTimeout = opts.mode === "regex"
+    ? `regex search took over ${opts.timeout}s on this page (catastrophic backtracking?), page skipped`
+    : `searching the page took over ${opts.timeout}s, page skipped`;
   const t0 = Date.now();
 
   const robotsCache = new Map();
@@ -295,7 +313,8 @@ export async function crawl(input) {
     if (!robotsCache.has(origin)) {
       robotsCache.set(origin, (async () => {
         try {
-          const { html } = await fetchHtml(origin + "/robots.txt", Math.min(timeoutMs, 5000), fetchOpts);
+          const robotsOpts = { ...fetchOpts, maxBodyBytes: ROBOTS_MAX_BYTES };
+          const { html } = await fetchHtml(origin + "/robots.txt", Math.min(timeoutMs, 5000), robotsOpts);
           return parseRobots(html);
         } catch {
           return [];
@@ -308,7 +327,7 @@ export async function crawl(input) {
   const allowed = (href) => {
     try {
       const u = new URL(href);
-      if (!opts.anySite && u.origin !== startOrigin) return false;
+      if (!opts.anySite && !origins.has(u.origin)) return false;
       if (opts.within && !u.pathname.startsWith(opts.within)) return false;
       return true;
     } catch {
@@ -317,10 +336,12 @@ export async function crawl(input) {
   };
 
   const visited = new Set([normalizeUrl(opts.url)]);
+  const fetched = new Set(); // final URLs, after redirects
   const queue = [{ url: opts.url, depth: 0 }];
   const hits = [];
   const errors = [];
   const truncatedPages = [];
+  let start = null; // what the start page looked like, for the JS-rendering hint
   let scanned = 0;
   let blocked = 0;
   let skipped = 0;
@@ -331,94 +352,115 @@ export async function crawl(input) {
   let active = 0;
   let queued = 1; // pages queued for fetching, start page included
 
-  await new Promise((resolve) => {
-    let graceTimer;
-    const finish = () => {
-      clearTimeout(deadlineTimer);
-      clearTimeout(graceTimer);
-      resolve();
-    };
-    // --max-seconds: stop queueing, abort in-flight fetches, and give them a
-    // moment to unwind; resolve regardless so the crawl can never hang.
-    const deadlineTimer = setTimeout(() => {
-      timedOut = true;
-      stopped = true;
-      queue.length = 0;
-      deadline.abort();
-      graceTimer = setTimeout(finish, 1000);
-    }, opts.maxSeconds * 1000);
+  try {
+    await new Promise((resolve) => {
+      let graceTimer;
+      const finish = () => {
+        clearTimeout(deadlineTimer);
+        clearTimeout(graceTimer);
+        resolve();
+      };
+      // --max-seconds: stop queueing, abort in-flight fetches and searches, and
+      // give them a moment to unwind; resolve regardless so the crawl can never hang.
+      const deadlineTimer = setTimeout(() => {
+        timedOut = true;
+        stopped = true;
+        queue.length = 0;
+        deadline.abort();
+        pool.close();
+        graceTimer = setTimeout(finish, 1000);
+      }, opts.maxSeconds * 1000);
 
-    const pump = () => {
-      if (stopped) queue.length = 0;
-      while (active < opts.concurrency && queue.length) {
-        const job = queue.shift();
-        active++;
-        visit(job).finally(() => {
-          active--;
-          pump();
-        });
-      }
-      if (active === 0 && queue.length === 0) finish();
-    };
+      const pump = () => {
+        if (stopped) queue.length = 0;
+        while (active < opts.concurrency && queue.length) {
+          const job = queue.shift();
+          active++;
+          visit(job).finally(() => {
+            active--;
+            pump();
+          });
+        }
+        if (active === 0 && queue.length === 0) finish();
+      };
 
-    const visit = async ({ url, depth }) => {
-      try {
-        if (opts.robots) {
-          const rules = await robotsFor(new URL(url).origin);
-          if (!robotsAllows(rules, url)) {
-            blocked++;
+      const visit = async ({ url, depth }) => {
+        try {
+          if (opts.robots) {
+            const rules = await robotsFor(new URL(url).origin);
+            if (!robotsAllows(rules, url)) {
+              blocked++;
+              return;
+            }
+          }
+          const { bytes, contentType, finalUrl, truncated } = await fetchPage(url, timeoutMs, fetchOpts);
+          if (truncated) truncatedPages.push(finalUrl);
+          if (stopped) return;
+          // Two links that redirect to the same page: search it once.
+          const finalKey = normalizeUrl(finalUrl);
+          if (fetched.has(finalKey)) return;
+          fetched.add(finalKey);
+          visited.add(finalKey);
+          if (depth === 0) {
+            try { origins.add(new URL(finalUrl).origin); } catch { /* keep the start origin */ }
+          }
+          const page = await pool.process({
+            bytes, contentType, url: finalUrl, query: opts.query, mode: opts.mode,
+            caseSensitive: opts.caseSensitive, snippets: opts.snippets, mainOnly: opts.mainOnly,
+            links: depth < opts.depth && !stopped,
+          }, timeoutMs, searchTimeout);
+          if (firstHit) return; // another page already answered (--first)
+          scanned++;
+          if (depth === 0) start = { textLength: page.textLength, hasScripts: page.hasScripts };
+          if (page.matchCount > 0) {
+            hits.push({
+              url: finalUrl, title: page.title, depth, matchCount: page.matchCount, snippets: page.snippets,
+              ...(truncated && { truncated }),
+            });
+            if (opts.first) stopped = firstHit = true;
+          }
+          if (depth < opts.depth && !stopped) {
+            for (const href of page.links) {
+              if (timedOut) break;
+              const n = normalizeUrl(href);
+              if (visited.has(n) || !allowed(href)) continue;
+              visited.add(n);
+              // Check robots before queueing so blocked links don't use up --max-pages.
+              if (opts.robots && !robotsAllows(await robotsFor(new URL(href).origin), href)) {
+                blocked++;
+                continue;
+              }
+              if (queued >= opts.maxPages) {
+                capped = true;
+                break;
+              }
+              queued++;
+              queue.push({ url: href, depth: depth + 1 });
+            }
+          }
+        } catch (e) {
+          if (timedOut) {
+            // Pages cut off by the deadline aren't errors, unless it's the start page.
+            if (depth === 0) {
+              scanned++;
+              errors.push({ url, depth, error: `deadline: no response within ${opts.maxSeconds}s` });
+            }
             return;
           }
-        }
-        const { html, finalUrl, truncated } = await fetchHtml(url, timeoutMs, fetchOpts);
-        if (truncated) truncatedPages.push(finalUrl);
-        if (stopped) return;
-        scanned++;
-        const text = htmlToText(opts.mainOnly ? mainContent(html) : html);
-        const found = searchText(text, cfg, opts.snippets);
-        if (found.matchCount > 0) {
-          hits.push({ url: finalUrl, title: pageTitle(html), depth, ...found, ...(truncated && { truncated }) });
-          if (opts.first) stopped = firstHit = true;
-        }
-        if (depth < opts.depth && !stopped) {
-          for (const href of extractLinks(html, finalUrl)) {
-            if (timedOut) break;
-            const n = normalizeUrl(href);
-            if (visited.has(n) || !allowed(href)) continue;
-            visited.add(n);
-            // Check robots before queueing so blocked links don't use up --max-pages.
-            if (opts.robots && !robotsAllows(await robotsFor(new URL(href).origin), href)) {
-              blocked++;
-              continue;
-            }
-            if (queued >= opts.maxPages) {
-              capped = true;
-              break;
-            }
-            queued++;
-            queue.push({ url: href, depth: depth + 1 });
+          if (e?.skipped && depth > 0) {
+            skipped++; // a non-HTML link (PDF, markdown, image…), not a failure
+            return;
           }
+          scanned++;
+          errors.push({ url, depth, error: e?.message || String(e) });
         }
-      } catch (e) {
-        if (timedOut) {
-          // Pages cut off by the deadline aren't errors, unless it's the start page.
-          if (depth === 0) {
-            scanned++;
-            errors.push({ url, depth, error: `deadline: no response within ${opts.maxSeconds}s` });
-          }
-          return;
-        }
-        if (e?.skipped && depth > 0) {
-          skipped++; // a non-HTML link (PDF, markdown, image…), not a failure
-          return;
-        }
-        scanned++;
-        errors.push({ url, depth, error: e?.message || String(e) });
-      }
-    };
+      };
 
-    pump();
-  });
+      pump();
+    });
+  } finally {
+    pool.close();
+  }
 
   hits.sort((a, b) => b.matchCount - a.matchCount || a.depth - b.depth);
   const summary = {
