@@ -19,6 +19,12 @@ $ rfind https://docs.python.org/3/library/ "free-threaded" --within /3/library/ 
 …
 ```
 
+**Measured:** on three "which pages mention X?" questions about live docs sites,
+Claude agents using it finished about **2× faster** (92 s vs 171 s) and used
+about **a third fewer tokens** (−37% input, −58% output), with the same accuracy.
+The gain was largest on the biggest site (2.7×). It's a small sample; see the
+[full benchmark](https://github.com/grtwrn/recursive-find#benchmark-agents-with-and-without-rfind).
+
 ## MCP server
 
 **Claude Code**

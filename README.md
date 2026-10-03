@@ -78,27 +78,37 @@ node cli/scripts/rfind.mjs https://docs.openclaw.ai/tools/skills "extraDirs" --w
 
 ### Benchmark: agents with and without `rfind`
 
+**Result: agents using `rfind` were about 2× faster (1.9×) and used about a
+third fewer AI tokens, with the same accuracy.** The bigger the site, the
+bigger the win: 2.7× faster on the 323-page site, 1.4× on the smaller ones.
+
 Three "which pages on this docs site mention X?" questions, each answered by
 two fresh Claude Opus 5.5 agents (OpenClaw subagents with shell access): one
 told to use `rfind`, one told not to. Measured 2026-10-03 against the live sites.
 
-| Question | Time with / without | Turns | Input tokens | Output tokens |
-|---|---|---|---|---|
-| docs.python.org `/3/library/`: "free-threaded" (323 pages) | **30 s** / 82 s | 5 / 9 | 275k / 514k | 2.5k / 7.7k |
-| nodejs.org `/api/`: "AbortSignal.any" (71 pages) | **32 s** / 46 s | 5 / 6 | 273k / 340k | 1.9k / 2.6k |
-| docs.openclaw.ai `/tools/`: "allowSymlinkTargets" (117 pages) | **30 s** / 43 s | 5 / 8 | 272k / 440k | 1.3k / 3.3k |
-| **Total** | **92 s / 171 s (−46%)** | 15 / 23 | 820k / 1,294k (−37%) | 5.7k / 13.6k (−58%) |
+| Question | Time with / without | Speedup | Agent steps | Input tokens | Output tokens |
+|---|---|---|---|---|---|
+| docs.python.org `/3/library/`: "free-threaded" (323 pages) | **30 s** / 82 s | **2.7×** | 5 / 9 | 275k / 514k | 2.5k / 7.7k |
+| nodejs.org `/api/`: "AbortSignal.any" (71 pages) | **32 s** / 46 s | 1.4× | 5 / 6 | 273k / 340k | 1.9k / 2.6k |
+| docs.openclaw.ai `/tools/`: "allowSymlinkTargets" (117 pages) | **30 s** / 43 s | 1.4× | 5 / 8 | 272k / 440k | 1.3k / 3.3k |
+| **All three** | **92 s / 171 s** | **1.9× (−46% time)** | 15 / 23 (−35%) | 820k / 1,294k (**−37%**) | 5.7k / 13.6k (**−58%**) |
 
-All six agents reached the right answer. Without `rfind`, the agents didn't
-fetch pages one by one. They wrote their own crawlers (Python `urllib`, `curl`
-loops, sitemap and `objects.inv` parsing), so this compares against a strong
-baseline. The savings come from skipping that
-scaffolding and needing fewer turns. Input tokens are mostly the agent's system
-prompt being re-read each turn (prompt-cached), so fewer turns means fewer
-tokens. The `rfind` rows are from the current version. An earlier run exposed
-two bugs that cost the agent extra checking: a silent 3 MB page cap and
-non-HTML links being reported as errors. Both are fixed. Small sample: one run
-per arm per question.
+All six agents reached the right answer.
+
+**How to read this.** It's a solid gain, not a dramatic one. Without `rfind`,
+the agents didn't fetch pages one by one. They wrote their own crawlers
+(Python `urllib`, `curl` loops, sitemap and `objects.inv` parsing), so this
+compares against a strong baseline. The savings come from skipping that
+scaffolding and needing fewer steps. Input tokens are mostly the agent's system
+prompt being re-read each step (prompt-cached), so fewer steps means fewer
+tokens. Agents that can't write and run code would likely gain more, but this
+benchmark didn't test that.
+
+**Caveats.** Small sample: three questions, one run per side each, docs sites
+only, one model. The true speedup could be somewhat higher or lower than 1.9×.
+The `rfind` rows are from the current version. An earlier run exposed two bugs
+that cost the agent extra checking, a silent 3 MB page cap and non-HTML links
+reported as errors. Both are fixed.
 
 ## Regenerating icons
 
