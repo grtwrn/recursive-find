@@ -16,7 +16,7 @@ logged-in pages (`browser`), or general web questions (`web_search`).
 ## Run
 
 ```sh
-rfind <url> "<query>" [--depth 1] [--within /docs/] [--max-pages 100] [--mode text|word|regex] [--case] [--first] [--json]
+rfind <url> "<query>" [--depth 1] [--within /docs/] [--max-pages 100] [--mode text|word|regex] [--case] [--main] [--first] [--json]
 ```
 
 (`rfind` is `scripts/rfind.mjs` in this skill, symlinked onto PATH; Node 18+, no dependencies. `rfind --help` lists every flag.)
@@ -29,9 +29,14 @@ rfind <url> "<query>" [--depth 1] [--within /docs/] [--max-pages 100] [--mode te
    only with `--within` or a small site.
 3. Use `--mode word` for short words (`cat` won't match `category`), `--mode regex`
    for patterns, `--first` when one hit answers the question.
-4. Read the summary line: if it says `hit --max-pages`, results are incomplete.
+4. Add `--main` when the question is which pages *discuss* X: it searches only
+   the main content (`<main>`, `role="main"`, `<article>`), so "Next topic" links,
+   sidebars and menus that merely name X don't count as hits.
+5. Read the summary line: if it says `hit --max-pages`, results are incomplete.
    Narrow (`--within`, a deeper start URL) before raising `--max-pages` (max 1000).
-5. Matches show as `[[match]]` inside snippets. Cite the page URL; `web_fetch`
+   It also flags pages over 32 MB that were only partly searched. Skipped
+   non-HTML links are normal, not failures.
+6. Matches show as `[[match]]` inside snippets. Cite the page URL; `web_fetch`
    it if you need more than the snippet.
 
 ## Behavior

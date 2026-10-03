@@ -18,21 +18,23 @@ const USAGE = `usage: rfind <url> <query> [options]
   --snippets N      snippets per page (default 3)
   --concurrency N   parallel fetches (default 4, max 8)
   --timeout S       per-page timeout in seconds (default 10)
+  --main            search only the page's main content (<main>, role="main" or
+                    <article>), skipping nav, sidebars and footers when present
   --ignore-robots   don't honor robots.txt
   --json            JSON output`;
 
 const SNIPPET_RADIUS = 60;
-const MAX_BODY_BYTES = 3 * 1024 * 1024;
+const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const UA = "rfind/1.0 (+https://github.com/grtwrn/recursive-find)";
 const SKIP_EXT =
-  /\.(pdf|jpe?g|png|gif|webp|svg|ico|bmp|tiff?|mp[34]|m4a|wav|ogg|webm|mov|avi|zip|gz|tgz|bz2|7z|rar|dmg|exe|pkg|deb|rpm|iso|woff2?|ttf|otf|eot|css|js|mjs|json|xml|rss|atom|csv|xlsx?|docx?|pptx?)$/i;
+  /\.(pdf|jpe?g|png|gif|webp|svg|ico|bmp|tiff?|mp[34]|m4a|wav|ogg|webm|mov|avi|zip|gz|tgz|bz2|7z|rar|dmg|exe|pkg|deb|rpm|iso|woff2?|ttf|otf|eot|css|js|mjs|json|xml|rss|atom|csv|md|markdown|xlsx?|docx?|pptx?)$/i;
 
 // --- args ---
 
 function parseArgs(argv) {
   const opts = {
     depth: 1, maxPages: 100, mode: "text", caseSensitive: false, anySite: false,
-    within: null, first: false, limit: 20, snippets: 3, concurrency: 4,
+    within: null, mainOnly: false, first: false, limit: 20, snippets: 3, concurrency: 4,
     timeout: 10, robots: true, json: false,
   };
   const pos = [];
@@ -60,6 +62,7 @@ function parseArgs(argv) {
       case "--snippets": opts.snippets = num(next(), a); break;
       case "--concurrency": opts.concurrency = Math.max(1, Math.min(8, num(next(), a))); break;
       case "--timeout": opts.timeout = Math.max(1, num(next(), a)); break;
+      case "--main": opts.mainOnly = true; break;
       case "--ignore-robots": opts.robots = false; break;
       case "--json": opts.json = true; break;
       default:
@@ -154,6 +157,26 @@ function normalizeUrl(href) {
   }
 }
 
+// The page's main content: the first <main>, role="main" element or <article>,
+// found by counting nested tags of the same name. Falls back to the whole page.
+function mainContent(html) {
+  const open =
+    /<main\b[^>]*>/i.exec(html) ||
+    /<([a-z][a-z0-9]*)\b[^>]*\brole\s*=\s*["']?main\b[^>]*>/i.exec(html) ||
+    /<article\b[^>]*>/i.exec(html);
+  if (!open) return html;
+  const tag = (open[1] || /^<([a-z0-9]+)/i.exec(open[0])[1]).toLowerCase();
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, "gi");
+  re.lastIndex = open.index + open[0].length;
+  let depth = 1;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return html.slice(open.index, m.index);
+  }
+  return html.slice(open.index);
+}
+
 // --- matching (from worker.js) ---
 
 const WORD_RE = /\w/;
@@ -214,22 +237,24 @@ async function fetchHtml(url, timeoutMs) {
     const type = res.headers.get("content-type") || "";
     if (type && !/text\/html|text\/plain|application\/xhtml/i.test(type)) {
       res.body?.cancel().catch(() => {});
-      throw new Error(`skipped ${type.split(";")[0]}`);
+      throw Object.assign(new Error(`skipped ${type.split(";")[0]}`), { skipped: true });
     }
     const reader = res.body.getReader();
     const chunks = [];
     let size = 0;
+    let truncated = false;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.length;
       chunks.push(value);
       if (size > MAX_BODY_BYTES) {
+        truncated = true;
         reader.cancel().catch(() => {});
         break;
       }
     }
-    return { html: Buffer.concat(chunks).toString("utf8"), finalUrl: res.url || url };
+    return { html: Buffer.concat(chunks).toString("utf8"), finalUrl: res.url || url, truncated };
   } catch (e) {
     if (e.name === "AbortError") throw new Error("timeout");
     throw e;
@@ -315,8 +340,10 @@ async function main() {
   const queue = [{ url: opts.url, depth: 0 }];
   const hits = [];
   const errors = [];
+  const truncatedPages = [];
   let scanned = 0;
   let blocked = 0;
+  let skipped = 0;
   let capped = false;
   let stopped = false;
   let active = 0;
@@ -345,13 +372,14 @@ async function main() {
             return;
           }
         }
-        const { html, finalUrl } = await fetchHtml(url, timeoutMs);
+        const { html, finalUrl, truncated } = await fetchHtml(url, timeoutMs);
+        if (truncated) truncatedPages.push(finalUrl);
         if (stopped) return;
         scanned++;
-        const text = htmlToText(html);
+        const text = htmlToText(opts.mainOnly ? mainContent(html) : html);
         const found = searchText(text, cfg, opts.snippets);
         if (found.matchCount > 0) {
-          hits.push({ url: finalUrl, title: pageTitle(html), depth, ...found });
+          hits.push({ url: finalUrl, title: pageTitle(html), depth, ...found, ...(truncated && { truncated }) });
           if (opts.first) stopped = true;
         }
         if (depth < opts.depth && !stopped) {
@@ -373,6 +401,10 @@ async function main() {
           }
         }
       } catch (e) {
+        if (e?.skipped && depth > 0) {
+          skipped++; // a non-HTML link (PDF, markdown, image…), not a failure
+          return;
+        }
         scanned++;
         errors.push({ url, depth, error: e?.message || String(e) });
       }
@@ -387,7 +419,7 @@ async function main() {
   const summary = {
     query: opts.query, start: opts.url, depth: opts.depth, mode: opts.mode,
     pagesScanned: scanned, pagesWithHits: hits.length, totalHits,
-    errors: errors.length, robotsBlocked: blocked, capped,
+    errors: errors.length, skippedNonHtml: skipped, robotsBlocked: blocked, capped, truncatedPages,
     stoppedAtFirst: opts.first && stopped, seconds: +((Date.now() - t0) / 1000).toFixed(1),
   };
 
@@ -397,8 +429,12 @@ async function main() {
     const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
     let line = `${plural(totalHits, "hit")} on ${plural(hits.length, "page")} · ${plural(scanned, "page")} scanned, depth ${opts.depth}, ${summary.seconds}s`;
     if (errors.length) line += ` · ${plural(errors.length, "error")}`;
+    if (skipped) line += ` · ${skipped} non-HTML links skipped`;
     if (blocked) line += ` · ${blocked} blocked by robots.txt`;
     if (capped) line += ` · hit --max-pages ${opts.maxPages}, results may be incomplete`;
+    if (truncatedPages.length) {
+      line += ` · ${plural(truncatedPages.length, "page")} over ${MAX_BODY_BYTES >> 20} MB only partly searched: ${truncatedPages.join(", ")}`;
+    }
     if (summary.stoppedAtFirst) line += " · stopped at first hit";
     console.log(line);
     for (const h of hits.slice(0, opts.limit)) {

@@ -62,12 +62,38 @@ node cli/scripts/rfind.mjs https://docs.openclaw.ai/tools/skills "extraDirs" --w
 ```
 
 - Node 18+, no dependencies. `--help` lists the flags: `--depth`, `--within`,
-  `--max-pages`, `--mode text|word|regex`, `--case`, `--first`, `--json`, etc.
+  `--max-pages`, `--mode text|word|regex`, `--case`, `--main` (main content
+  only, ignoring nav and sidebars), `--first`, `--json`, etc.
 - Agent-safe defaults: same site only, depth 1, 100-page cap, 4 parallel
-  fetches, honors `robots.txt`, skips non-HTML links, caps each page at 3 MB.
+  fetches, honors `robots.txt`, skips non-HTML links. Pages over 32 MB are
+  searched partially and flagged in the summary.
 - `cli/` is also an [Agent Skill](https://agentskills.io) (`cli/SKILL.md`):
   copy it into your agent's skills folder as `recursive-find/` and symlink
   `scripts/rfind.mjs` onto your PATH as `rfind`.
+
+### Benchmark: agents with and without `rfind`
+
+Three "which pages on this docs site mention X?" questions, each answered by
+two fresh Claude Opus 5.5 agents (OpenClaw subagents with shell access): one
+told to use `rfind`, one told not to. Measured 2026-10-03 against the live sites.
+
+| Question | Time with / without | Turns | Input tokens | Output tokens |
+|---|---|---|---|---|
+| docs.python.org `/3/library/`: "free-threaded" (323 pages) | **30 s** / 82 s | 5 / 9 | 275k / 514k | 2.5k / 7.7k |
+| nodejs.org `/api/`: "AbortSignal.any" (71 pages) | **32 s** / 46 s | 5 / 6 | 273k / 340k | 1.9k / 2.6k |
+| docs.openclaw.ai `/tools/`: "allowSymlinkTargets" (117 pages) | **30 s** / 43 s | 5 / 8 | 272k / 440k | 1.3k / 3.3k |
+| **Total** | **92 s / 171 s (−46%)** | 15 / 23 | 820k / 1,294k (−37%) | 5.7k / 13.6k (−58%) |
+
+All six agents reached the right answer. Without `rfind`, the agents didn't
+fetch pages one by one. They wrote their own crawlers (Python `urllib`, `curl`
+loops, sitemap and `objects.inv` parsing), so this compares against a strong
+baseline. The savings come from skipping that
+scaffolding and needing fewer turns. Input tokens are mostly the agent's system
+prompt being re-read each turn (prompt-cached), so fewer turns means fewer
+tokens. The `rfind` rows are from the current version. An earlier run exposed
+two bugs that cost the agent extra checking: a silent 3 MB page cap and
+non-HTML links being reported as errors. Both are fixed. Small sample: one run
+per arm per question.
 
 ## Regenerating icons
 
