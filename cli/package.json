@@ -2,6 +2,8 @@
   "name": "recursive-find-mcp",
   "version": "1.0.0",
   "description": "Ctrl+F for whole websites, for agents: search a page and every page it links to, get back only the matching pages with snippets. MCP server, CLI (rfind) and agent skill.",
+  "license": "MIT",
+  "author": "Garrett Warren",
   "type": "module",
   "bin": {
     "rfind": "scripts/rfind.mjs",
